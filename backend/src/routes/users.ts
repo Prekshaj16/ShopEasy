@@ -1,8 +1,13 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { auth } from '../middleware/auth';
 import User from '../models/User';
 import Product from '../models/Product';
+import mongoose from 'mongoose';
+
+interface AuthRequest extends Request {
+  user?: { userId: string };
+}
 
 const router = express.Router();
 
@@ -11,49 +16,26 @@ router.patch('/profile', auth, [
   body('firstName').optional().trim().isLength({ min: 1 }).withMessage('First name cannot be empty'),
   body('lastName').optional().trim().isLength({ min: 1 }).withMessage('Last name cannot be empty'),
   body('phone').optional().matches(/^\+?[\d\s-()]+$/).withMessage('Invalid phone number format')
-], async (req, res) => {
+], async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
 
     const allowedUpdates = ['firstName', 'lastName', 'phone', 'avatar'];
-    const updates = Object.keys(req.body)
-      .filter(key => allowedUpdates.includes(key))
-      .reduce((obj: any, key) => {
-        obj[key] = req.body[key];
-        return obj;
-      }, {});
+    const updates: Record<string, any> = {};
 
-    const user = await User.findByIdAndUpdate(
-      req.user.userId,
-      updates,
-      { new: true, runValidators: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Profile updated successfully',
-      data: user
+    allowedUpdates.forEach(field => {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    const user = await User.findByIdAndUpdate(req.user?.userId, updates, { new: true, runValidators: true });
+
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    return res.json({ success: true, message: 'Profile updated successfully', data: user });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update profile'
-    });
+    return res.status(500).json({ success: false, message: 'Failed to update profile' });
   }
 });
 
@@ -67,26 +49,16 @@ router.post('/addresses', auth, [
   body('state').trim().isLength({ min: 1 }).withMessage('State is required'),
   body('zipCode').trim().isLength({ min: 1 }).withMessage('Zip code is required'),
   body('country').trim().isLength({ min: 1 }).withMessage('Country is required')
-], async (req, res) => {
+], async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
 
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
+    const user = await User.findById(req.user?.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
     const newAddress = {
+      _id: new mongoose.Types.ObjectId(),
       type: req.body.type,
       firstName: req.body.firstName,
       lastName: req.body.lastName,
@@ -95,260 +67,65 @@ router.post('/addresses', auth, [
       state: req.body.state,
       zipCode: req.body.zipCode,
       country: req.body.country,
-      isDefault: req.body.isDefault || false
+      isDefault: req.body.isDefault ?? false
     };
 
-    // If this is set as default, unset other default addresses of same type
     if (newAddress.isDefault) {
       user.addresses.forEach(addr => {
-        if (addr.type === newAddress.type) {
-          addr.isDefault = false;
-        }
+        if (addr.type === newAddress.type) addr.isDefault = false;
       });
     }
 
     user.addresses.push(newAddress);
     await user.save();
 
-    res.status(201).json({
-      success: true,
-      message: 'Address added successfully',
-      data: user.addresses
-    });
+    return res.status(201).json({ success: true, message: 'Address added successfully', data: user.addresses });
   } catch (error) {
     console.error('Add address error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to add address'
-    });
-  }
-});
-
-// Update address
-router.patch('/addresses/:addressId', auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    const address = user.addresses.id(req.params.addressId);
-    if (!address) {
-      return res.status(404).json({
-        success: false,
-        message: 'Address not found'
-      });
-    }
-
-    // Update address fields
-    const allowedUpdates = ['firstName', 'lastName', 'address', 'city', 'state', 'zipCode', 'country', 'isDefault'];
-    allowedUpdates.forEach(field => {
-      if (req.body[field] !== undefined) {
-        (address as any)[field] = req.body[field];
-      }
-    });
-
-    // If this is set as default, unset other default addresses of same type
-    if (req.body.isDefault) {
-      user.addresses.forEach(addr => {
-        if (addr.type === address.type && addr._id.toString() !== address._id.toString()) {
-          addr.isDefault = false;
-        }
-      });
-    }
-
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Address updated successfully',
-      data: user.addresses
-    });
-  } catch (error) {
-    console.error('Update address error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update address'
-    });
-  }
-});
-
-// Delete address
-router.delete('/addresses/:addressId', auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    const addressIndex = user.addresses.findIndex(
-      addr => addr._id.toString() === req.params.addressId
-    );
-
-    if (addressIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: 'Address not found'
-      });
-    }
-
-    user.addresses.splice(addressIndex, 1);
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Address deleted successfully',
-      data: user.addresses
-    });
-  } catch (error) {
-    console.error('Delete address error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete address'
-    });
-  }
-});
-
-// Get user addresses
-router.get('/addresses', auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.userId).select('addresses');
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      data: user.addresses
-    });
-  } catch (error) {
-    console.error('Get addresses error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch addresses'
-    });
-  }
-});
-
-// Add to wishlist
-router.post('/wishlist/:productId', auth, async (req, res) => {
-  try {
-    const { productId } = req.params;
-
-    // Check if product exists
-    const product = await Product.findById(productId);
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found'
-      });
-    }
-
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    // Check if product is already in wishlist
-    if (user.wishlist.includes(productId as any)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Product already in wishlist'
-      });
-    }
-
-    user.wishlist.push(productId as any);
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Product added to wishlist',
-      data: user.wishlist
-    });
-  } catch (error) {
-    console.error('Add to wishlist error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to add to wishlist'
-    });
-  }
-});
-
-// Remove from wishlist
-router.delete('/wishlist/:productId', auth, async (req, res) => {
-  try {
-    const { productId } = req.params;
-
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    const index = user.wishlist.indexOf(productId as any);
-    if (index === -1) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not in wishlist'
-      });
-    }
-
-    user.wishlist.splice(index, 1);
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Product removed from wishlist',
-      data: user.wishlist
-    });
-  } catch (error) {
-    console.error('Remove from wishlist error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to remove from wishlist'
-    });
+    return res.status(500).json({ success: false, message: 'Failed to add address' });
   }
 });
 
 // Get wishlist
-router.get('/wishlist', auth, async (req, res) => {
+router.get('/wishlist', auth, async (req: AuthRequest, res: Response): Promise<Response> => {
   try {
-    const user = await User.findById(req.user.userId)
+    const user = await User.findById(req.user?.userId)
       .populate('wishlist', 'name price images category rating reviews')
       .select('wishlist');
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    res.json({
-      success: true,
-      data: user.wishlist
-    });
+    return res.json({ success: true, data: user.wishlist });
   } catch (error) {
     console.error('Get wishlist error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch wishlist'
-    });
+    return res.status(500).json({ success: false, message: 'Failed to fetch wishlist' });
   }
 });
 
+// Add to wishlist
+router.post('/wishlist/:productId', auth, async (req: AuthRequest, res: Response): Promise<Response> => {
+  try {
+    const { productId } = req.params;
+
+    const product = await Product.findById(productId);
+    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+
+    const user = await User.findById(req.user?.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (user.wishlist.some(id => id.toString() === productId)) {
+      return res.status(400).json({ success: false, message: 'Product already in wishlist' });
+    }
+
+    user.wishlist.push(new mongoose.Types.ObjectId(productId));
+    await user.save();
+
+    return res.json({ success: true, message: 'Product added to wishlist', data: user.wishlist });
+  } catch (error) {
+    console.error('Add to wishlist error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add to wishlist' });
+  }
+});
+
+// Export the router correctly
 export default router;
