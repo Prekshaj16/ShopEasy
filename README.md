@@ -2,6 +2,9 @@
 
 
 ShopEasy is a modern e-commerce platform designed to provide a seamless shopping experience. Built with Next.js, it offers fast performance, dynamic features, and an intuitive UI for buyers and sellers.
+
+
+
 🚀 Features
 - Product Listings – Browse a wide range of products with detailed descriptions and pricing.
 - User Authentication – Secure login and registration functionality.
